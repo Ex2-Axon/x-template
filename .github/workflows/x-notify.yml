@@ -1,0 +1,90 @@
+name: X (Twitter) Release Post
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  post-x:
+    name: Post to X (Twitter)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install twitter-api-v2
+        run: npm install twitter-api-v2
+
+      - name: Read version from package.json
+        id: pkg
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          APP_NAME=$(node -p "require('./package.json').name")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+
+      - name: Get commit info
+        id: commit
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+          COMMIT_HASH=$(git log -1 --pretty=format:"%h")
+          echo "message=$COMMIT_MSG" >> $GITHUB_OUTPUT
+          echo "hash=$COMMIT_HASH" >> $GITHUB_OUTPUT
+
+      - name: Post to X
+        env:
+          X_API_KEY:            ${{ secrets.X_API_KEY }}
+          X_API_SECRET:         ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:       ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+        run: |
+          COMMIT_URL="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          BRANCH="${{ github.ref_name }}"
+          APP_NAME="${{ steps.pkg.outputs.app_name }}"
+          VERSION="${{ steps.pkg.outputs.version }}"
+          COMMIT_MSG="${{ steps.commit.outputs.message }}"
+          COMMIT_HASH="${{ steps.commit.outputs.hash }}"
+
+          node -e "
+            const { TwitterApi } = require('twitter-api-v2');
+
+            const client = new TwitterApi({
+              appKey:            process.env.X_API_KEY,
+              appSecret:         process.env.X_API_SECRET,
+              accessToken:       process.env.X_ACCESS_TOKEN,
+              accessSecret:      process.env.X_ACCESS_TOKEN_SECRET,
+            });
+
+            const text = \`🚀 \${process.env.APP_NAME} v\${process.env.VERSION}
+
+📝 \${process.env.COMMIT_MSG}
+🌿 branch: \${process.env.BRANCH}
+🔗 \${process.env.COMMIT_URL}
+
+#opensource #webdev #vite #react\`;
+
+            client.v2.tweet(text)
+              .then(r => { console.log('✅ Posted to X:', r.data.id); })
+              .catch(e => { console.error('❌ Failed:', e); process.exit(1); });
+          "
+        env:
+          X_API_KEY:            ${{ secrets.X_API_KEY }}
+          X_API_SECRET:         ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:       ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          APP_NAME:  ${{ steps.pkg.outputs.app_name }}
+          VERSION:   ${{ steps.pkg.outputs.version }}
+          COMMIT_MSG: ${{ steps.commit.outputs.message }}
+          COMMIT_HASH: ${{ steps.commit.outputs.hash }}
+          BRANCH:    ${{ github.ref_name }}
+          COMMIT_URL: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
