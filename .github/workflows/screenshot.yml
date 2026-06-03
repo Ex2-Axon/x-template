@@ -32,26 +32,55 @@ jobs:
           npm install playwright
           npx playwright install chromium --with-deps
 
-      - name: Wait for GitHub Pages to propagate
-        run: sleep 30
+      - name: Set site URL
+        id: vars
+        run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          echo "site_url=https://${{ github.repository_owner }}.github.io/${REPO_NAME}/" >> $GITHUB_OUTPUT
 
-      - name: Take screenshot
+      - name: Wait for GitHub Pages and take screenshot with retry
         run: |
           cat > take-screenshot.mjs << 'EOF'
           import { chromium } from 'playwright';
-          const browser = await chromium.launch();
-          const page = await browser.newPage();
-          await page.setViewportSize({ width: 1280, height: 720 });
-          await page.goto('https://ex2-axon.github.io/x-template/', {
-            waitUntil: 'networkidle',
-            timeout: 30000
-          });
-          await page.waitForTimeout(2000);
-          await page.screenshot({ path: 'screenshot.png', fullPage: false });
-          await browser.close();
-          console.log('Screenshot saved');
+          
+          const MAX_RETRIES = 5;
+          const DELAY = 10000; // 10 seconds between retries
+          const URL = process.env.SITE_URL;
+          
+          for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+              console.log(`Attempt ${attempt}/${MAX_RETRIES}: Taking screenshot of ${URL}...`);
+              const browser = await chromium.launch();
+              const page = await browser.newPage();
+              await page.setViewportSize({ width: 1280, height: 720 });
+              
+              await page.goto(URL, {
+                waitUntil: 'networkidle',
+                timeout: 30000
+              });
+              
+              await page.waitForTimeout(2000);
+              await page.screenshot({ path: 'screenshot.png', fullPage: false });
+              await browser.close();
+              
+              console.log('Screenshot saved successfully');
+              process.exit(0);
+            } catch (error) {
+              console.error(`Attempt ${attempt} failed:`, error.message);
+              
+              if (attempt < MAX_RETRIES) {
+                console.log(`Waiting ${DELAY / 1000}s before retry...`);
+                await new Promise(r => setTimeout(r, DELAY));
+              } else {
+                console.error('All attempts failed');
+                process.exit(1);
+              }
+            }
+          }
           EOF
           node take-screenshot.mjs
+        env:
+          SITE_URL: ${{ steps.vars.outputs.site_url }}
 
       - name: Read package info
         id: pkg
@@ -82,3 +111,13 @@ jobs:
           git add .github/screenshots/
           git diff --staged --quiet || git commit -m "chore: update screenshot v${{ steps.pkg.outputs.version }} [skip ci]"
           git push
+
+      - name: Send to Discord
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          curl -s -o /dev/null \
+            -F "payload_json={\"username\":\"Axon Deploy Bot\",\"embeds\":[{\"title\":\"${{ steps.pkg.outputs.app_name }} v${{ steps.pkg.outputs.version }} deployed\",\"url\":\"${{ steps.vars.outputs.site_url }}\",\"color\":65535,\"fields\":[{\"name\":\"Commit\",\"value\":\"${{ steps.commit.outputs.hash }} ${{ steps.commit.outputs.message }}\"}],\"image\":{\"url\":\"attachment://screenshot.png\"},\"timestamp\":\"${TIMESTAMP}\"}]}" \
+            -F "files[0]=@screenshot.png;type=image/png" \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}"
+          echo "Sent to Discord"
+
